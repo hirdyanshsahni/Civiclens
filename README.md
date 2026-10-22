@@ -2,6 +2,10 @@
 
 **See the Issue. Map the Problem. Inspire the Change.**
 
+**Public app:** Deployment setup is ready below. The live address will appear here after the first Render deployment.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/hirdyanshsahni/Civiclens)
+
 CIVICLENS is a civic issue reporting and municipal response application. Citizens can register, share a photo and location, follow a report through its status history, and confirm a nearby issue. City staff can triage, assign, update, merge duplicates, record resolution details, review the audit trail, export reports, and view analytics calculated from the SQLite database.
 
 The application uses a small FastAPI service, SQLite persistence, private local photo storage, a responsive browser interface, and Leaflet with OpenStreetMap. It runs on Windows with Python; Node.js is not required.
@@ -30,7 +34,17 @@ The application uses a small FastAPI service, SQLite persistence, private local 
 - Visual Studio Code (optional, recommended)
 - Internet access for OpenStreetMap tiles, address search, and the optional configured vision provider
 
-The server, report data, and local uploads do not require a paid service. The map and address search depend on the availability and usage policy of public OpenStreetMap services. Smartphone location and photo capture use standard browser capabilities; ESP32 and fixed-camera integrations are not currently implemented.
+The map and address search depend on the availability and usage policy of public OpenStreetMap services. Smartphone location and photo capture use standard browser capabilities; ESP32 and fixed-camera integrations are not currently implemented.
+
+## Public hosting on Render
+
+The repository includes a Render Blueprint in `render.yaml`. It deploys the full FastAPI application in Singapore, runs the production configuration, and attaches a 1 GB persistent disk for the SQLite database and private report photos. The Blueprint generates the session secret automatically and asks you to enter the administrator email and a unique password in Render's setup screen. Do not share those credentials or commit them to Git.
+
+Render currently lists the smallest always-on web service at $7/month and disk storage at $0.25 per GB per month, so this 1 GB configuration is about $7.25/month before tax or any usage overages. Free web services cannot attach persistent disks; they also lose local SQLite databases and uploads on restart or redeploy, so this project does not use the free plan for its live data. See [Render pricing](https://render.com/pricing) and [Render persistent disk behavior](https://render.com/docs/disks).
+
+To deploy, sign in to Render, open the **Deploy to Render** button above, connect the GitHub repository, and provide your administrator email and a password of at least 12 characters when prompted. Review the service plan and disk in Render's confirmation screen before creating them. Render then builds the repository and assigns the live `onrender.com` address; add that address to the **Public app** line at the top of this README once deployment is live.
+
+AI vision and email receipts remain in their clearly labeled fallback states until you add the corresponding provider keys and SMTP settings under the Render service's environment settings. Never put these secrets in `render.yaml` or GitHub.
 
 ## Languages and Aadhaar sign-in
 

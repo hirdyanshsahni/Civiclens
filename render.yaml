@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: civiclens-hirdyanshsahni
+    runtime: python
+    plan: 0.5c-512mb
+    region: singapore
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    disk:
+      name: civiclens-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: CIVICLENS_DEMO_MODE
+        value: "false"
+      - key: CIVICLENS_DATA_DIR
+        value: /var/data
+      - key: CIVICLENS_DB_PATH
+        value: /var/data/civiclens.sqlite3
+      - key: CIVICLENS_UPLOAD_DIR
+        value: /var/data/uploads
+      - key: CIVICLENS_SECRET_KEY
+        generateValue: true
+      - key: CIVICLENS_ADMIN_EMAIL
+        sync: false
+      - key: CIVICLENS_ADMIN_PASSWORD
+        sync: false
