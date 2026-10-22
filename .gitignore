@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.civiclens.pid
+.venv/
+__pycache__/
+*.py[cod]
+backend/data/
+*.zip
+.pytest_cache/
+.mypy_cache/
+node_modules/
+.DS_Store
