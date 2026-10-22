@@ -159,7 +159,9 @@ SQLite data defaults to `backend/data/civiclens.sqlite3`. Uploaded images defaul
 
 ### Email receipts and status alerts
 
-CIVICLENS can send a receipt after a report is stored and a status email after a staff update. Configure `CIVICLENS_SMTP_HOST`, `CIVICLENS_SMTP_PORT`, `CIVICLENS_EMAIL_FROM`, and the SMTP username/password in the deployment's secret settings. SMTP credentials must never be committed to Git. STARTTLS is enabled by default on port 587; set `CIVICLENS_SMTP_USE_SSL=true` for an SSL SMTP endpoint such as port 465. If mail is not configured or delivery fails, the report is still saved and the interface says the email was not delivered.
+CIVICLENS can send a receipt after a report is stored and a status email after a staff update. Standard civic-issue receipts include the report ID, category, title, description, location, severity, submission time, current status, and the 48-hour review target. Confidential official-conduct reports receive a privacy-preserving email that omits allegation details and asks the citizen to sign in securely. Configure `CIVICLENS_SMTP_HOST`, `CIVICLENS_SMTP_PORT`, `CIVICLENS_EMAIL_FROM`, and the SMTP username/password in the deployment's secret settings. SMTP credentials must never be committed to Git. STARTTLS is enabled by default on port 587; set `CIVICLENS_SMTP_USE_SSL=true` for an SSL SMTP endpoint such as port 465. If mail is not configured or delivery fails, the report is still saved and the interface says the email was not delivered.
+
+The report submission response includes `emailStatus` and the newly saved event in `report.emailEvents`. The private `GET /api/reports/{id}/email-events` endpoint returns the authenticated report owner's or an administrator's delivery history, including subject, SMTP result, timestamp, and a safe diagnostic. `GET /api/admin/email-events` gives administrators a filterable, recent delivery log with report references. No email events or recipient addresses are included in public map APIs. `GET /api/config` reports only whether SMTP is configured; it never returns credentials.
 
 Every report starts a 48-hour CIVICLENS first-review target. The due date appears in the citizen report view and overdue items appear in the administrator queue. A staff update records the first response and triggers an email if SMTP is configured. This is a CIVICLENS service target, not a guarantee of an official department's investigation or final decision.
 
@@ -185,6 +187,8 @@ FastAPI publishes interactive API documentation at <http://127.0.0.1:8000/docs> 
 | `GET /api/reports/{id}` | Public; private fields for owner/admin | Report details and public status timeline |
 | `POST /api/reports` | Signed in | Save a report, private official-conduct concern, or offline retry; SMTP receipt when configured |
 | `GET /api/reports/mine`, `GET /api/notifications` | Signed in | Citizen history and updates |
+| `GET /api/reports/{id}/email-events` | Report owner or administrator | Private receipt and status-email delivery history |
+| `GET /api/admin/email-events` | Administrator | Recent email delivery log; optional `delivery_status` and `limit` filters |
 | `POST /api/reports/{id}/verify` | Signed in | One community confirmation per user |
 | `POST /api/reports/{id}/reopen` | Original reporter | Request another review of a resolved report |
 | `POST /api/reports/{id}/confirm-resolution` | Original reporter | Confirm that a resolved issue is fixed |

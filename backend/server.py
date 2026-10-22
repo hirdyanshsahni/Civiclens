@@ -226,7 +226,10 @@ def init_db() -> None:
           user_id TEXT REFERENCES users(id),
           event_type TEXT NOT NULL,
           recipient TEXT NOT NULL,
+          subject TEXT NOT NULL DEFAULT '',
           delivery_status TEXT NOT NULL,
+          delivery_detail TEXT NOT NULL DEFAULT '',
+          transport TEXT NOT NULL DEFAULT 'smtp',
           created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS resolution_evidence (
@@ -242,6 +245,14 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS report_sensitive_created_idx ON reports(is_sensitive, created_at);
         CREATE INDEX IF NOT EXISTS evidence_report_idx ON resolution_evidence(report_id, created_at);
         """)
+        email_columns = {row[1] for row in db.execute("PRAGMA table_info(email_events)").fetchall()}
+        for column, definition in {
+            "subject": "TEXT NOT NULL DEFAULT ''",
+            "delivery_detail": "TEXT NOT NULL DEFAULT ''",
+            "transport": "TEXT NOT NULL DEFAULT 'smtp'",
+        }.items():
+            if column not in email_columns:
+                db.execute(f"ALTER TABLE email_events ADD COLUMN {column} {definition}")
         count = db.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
         if DEMO_MODE:
             ensure_demo_user(db, "demo-citizen", "Demo Citizen", "citizen@civiclens.demo", os.getenv("CIVICLENS_DEMO_CITIZEN_PASSWORD", "CitizenDemo#2026"), "citizen")
@@ -446,9 +457,9 @@ def email_is_configured() -> bool:
     return bool(SMTP_HOST and SMTP_FROM and (bool(SMTP_USERNAME) == bool(SMTP_PASSWORD)))
 
 
-def send_mail(recipient: str, subject: str, body: str) -> str:
+def send_mail(recipient: str, subject: str, body: str) -> tuple[str, str]:
     if not email_is_configured():
-        return "not_configured"
+        return "not_configured", "SMTP is not configured on this server."
     message = EmailMessage()
     message["From"] = SMTP_FROM
     message["To"] = recipient
@@ -465,38 +476,76 @@ def send_mail(recipient: str, subject: str, body: str) -> str:
             if SMTP_USERNAME:
                 client.login(SMTP_USERNAME, SMTP_PASSWORD)
             client.send_message(message)
-        return "sent"
-    except (OSError, smtplib.SMTPException, ssl.SSLError):
-        return "failed"
+        return "sent", "Email accepted by the configured SMTP server."
+    except Exception as exc:
+        # Keep the useful failure class for authorized operators without storing provider text or credentials.
+        return "failed", f"SMTP delivery failed ({type(exc).__name__})."
 
 
 def deliver_report_email(report_id: str, event_type: str, status: str = "") -> str:
     with connect() as db:
-        row = db.execute("""SELECT r.id,r.is_sensitive,r.first_response_due_at,r.reporter_id,u.email
+        row = db.execute("""SELECT r.id,r.is_sensitive,r.first_response_due_at,r.reporter_id,
+          r.category,r.title,r.description,r.location,r.ward,r.severity,r.created_at,u.name,u.email
           FROM reports r LEFT JOIN users u ON u.id=r.reporter_id WHERE r.id=?""", (report_id,)).fetchone()
     if not row or not row["email"]:
         return "unavailable"
     recipient = row["email"]
     private_prefix = "Private report" if row["is_sensitive"] else "CIVICLENS report"
+    category_label = CATEGORIES.get(row["category"], "Other civic issue")
+    report_date = row["created_at"].replace("T", " ").replace("Z", " UTC")
+    due_date = row["first_response_due_at"].replace("T", " ").replace("Z", " UTC")
+    greeting = f"Hello {row['name']},\n\n" if row["name"] else "Hello,\n\n"
     if event_type == "report_received":
         subject = f"{private_prefix} received · {report_id}"
-        body = (
-            f"CIVICLENS has received your report {report_id}. It is recorded as Submitted.\n\n"
-            f"Our target is to provide an initial CIVICLENS review update within 48 hours (by {row['first_response_due_at']}). "
-            "This is a CIVICLENS service target; any government department investigation or final action may take longer and is not guaranteed by this independent platform.\n\n"
-            "Sign in to CIVICLENS to follow the report timeline. Please contact local emergency services directly if anyone is in immediate danger."
-        )
+        body_lines = [
+            greeting.rstrip(),
+            f"CIVICLENS has accepted and recorded your report {report_id}.",
+            "Current status: Submitted",
+        ]
+        if row["is_sensitive"]:
+            body_lines.extend([
+                "",
+                "For your privacy, this email does not repeat the details of your confidential report. Sign in to CIVICLENS to review it securely.",
+            ])
+        else:
+            body_lines.extend([
+                "",
+                "Report details:",
+                f"Reference: {report_id}",
+                f"Issue type: {category_label}",
+                f"Title: {row['title']}",
+                f"Description: {row['description']}",
+                f"Location: {row['location']}",
+            ])
+            if row["ward"]:
+                body_lines.append(f"Area: {row['ward']}")
+            body_lines.extend([
+                f"Severity: {row['severity']}",
+                f"Submitted: {report_date}",
+            ])
+        body_lines.extend([
+            "",
+            f"CIVICLENS targets an initial review update within 48 hours (by {due_date}). This is a CIVICLENS service target, not a guarantee of a government department investigation or final action.",
+            "Sign in to CIVICLENS to follow the report timeline. Please contact local emergency services directly if anyone is in immediate danger.",
+        ])
+        body = "\n".join(body_lines)
     else:
         subject = f"{private_prefix} update · {report_id}"
-        body = (
-            f"There is a new CIVICLENS update for report {report_id}.\n"
-            f"Current status: {status or 'Updated'}\n\n"
-            "Sign in to CIVICLENS to view the timeline and next steps. This update describes CIVICLENS processing and does not guarantee a government department outcome."
-        )
-    delivery_status = send_mail(recipient, subject, body)
+        body_lines = [
+            greeting.rstrip(),
+            f"There is a new CIVICLENS update for report {report_id}.",
+            f"Current status: {status or 'Updated'}",
+        ]
+        if not row["is_sensitive"]:
+            body_lines.extend([f"Issue type: {category_label}", f"Title: {row['title']}", f"Location: {row['location']}"])
+        else:
+            body_lines.extend(["", "Confidential report details are not repeated in email. Sign in to review the update securely."])
+        body_lines.extend(["", "Sign in to CIVICLENS to view the timeline and next steps. This update describes CIVICLENS processing and does not guarantee a government department outcome."])
+        body = "\n".join(body_lines)
+    delivery_status, delivery_detail = send_mail(recipient, subject, body)
     with connect() as db:
-        db.execute("INSERT INTO email_events(report_id,user_id,event_type,recipient,delivery_status,created_at) VALUES(?,?,?,?,?,?)",
-                   (report_id, row["reporter_id"], event_type, recipient, delivery_status, now_iso()))
+        db.execute("""INSERT INTO email_events(report_id,user_id,event_type,recipient,subject,delivery_status,delivery_detail,transport,created_at)
+          VALUES(?,?,?,?,?,?,?,?,?)""", (report_id, row["reporter_id"], event_type, recipient, subject, delivery_status, delivery_detail, "smtp", now_iso()))
     return delivery_status
 
 
@@ -590,6 +639,9 @@ def report_payload(db: sqlite3.Connection, report: sqlite3.Row, include_private:
         result["ai"] = {"provider": report["ai_provider"], "suggestedCategory": report["ai_category"] or None,
                          "suggestedSeverity": report["ai_severity"] or None,
                          "confidence": report["ai_confidence"], "explanation": report["ai_explanation"]}
+        result["emailEvents"] = [dict(row) for row in db.execute("""SELECT id,event_type AS eventType,subject,
+          delivery_status AS deliveryStatus,delivery_detail AS detail,transport,created_at AS createdAt
+          FROM email_events WHERE report_id=? ORDER BY id DESC LIMIT 20""", (report["id"],)).fetchall()]
     if include_admin:
         result["isSensitive"] = bool(report["is_sensitive"])
         result["reportedOfficialRole"] = report["reported_official_role"]
@@ -607,7 +659,8 @@ def report_payload(db: sqlite3.Connection, report: sqlite3.Row, include_private:
             for row in db.execute("""SELECT a.action,a.payload,a.created_at,u.name AS actor FROM audit_log a
               LEFT JOIN users u ON u.id=a.actor_id WHERE a.report_id=? ORDER BY a.id DESC LIMIT 100""", (report["id"],)).fetchall()
         ]
-        result["emailEvents"] = [dict(row) for row in db.execute("""SELECT event_type AS eventType,recipient,delivery_status AS deliveryStatus,created_at AS createdAt
+        result["emailEvents"] = [dict(row) for row in db.execute("""SELECT id,event_type AS eventType,recipient,subject,
+          delivery_status AS deliveryStatus,delivery_detail AS detail,transport,created_at AS createdAt
           FROM email_events WHERE report_id=? ORDER BY id DESC LIMIT 20""", (report["id"],)).fetchall()]
     return result
 
@@ -1041,6 +1094,10 @@ async def create_report(
         email_status = await run_in_threadpool(deliver_report_email, report_id, "report_received")
     except Exception:
         email_status = "failed"
+    with connect() as db:
+        refreshed = db.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
+        if refreshed:
+            result = report_payload(db, refreshed, include_private=True)
     return {"report": result, "potentialDuplicates": matches, "emailStatus": email_status}
 
 
@@ -1076,6 +1133,39 @@ def get_report(report_id: str, user: Optional[sqlite3.Row] = Depends(get_user)) 
         result = report_payload(db, row, include_private=bool(is_owner))
         result["isOwner"] = bool(is_owner)
         return result
+
+
+@app.get("/api/reports/{report_id}/email-events")
+def report_email_events(report_id: str, user: sqlite3.Row = Depends(signed_in)) -> dict:
+    """Return a private delivery history to the report owner or an administrator."""
+    with connect() as db:
+        report = db.execute("SELECT id,reporter_id FROM reports WHERE id=?", (report_id,)).fetchone()
+        if not report or (report["reporter_id"] != user["id"] and user["role"] != "admin"):
+            raise HTTPException(status_code=404, detail="Report not found.")
+        events = db.execute("""SELECT id,event_type AS eventType,recipient,subject,delivery_status AS deliveryStatus,
+          delivery_detail AS detail,transport,created_at AS createdAt
+          FROM email_events WHERE report_id=? ORDER BY id DESC LIMIT 50""", (report_id,)).fetchall()
+        return {"reportId": report_id, "events": [dict(row) for row in events]}
+
+
+@app.get("/api/admin/email-events")
+def admin_email_events(
+    limit: int = Query(default=100, ge=1, le=500), delivery_status: str = "",
+    user: sqlite3.Row = Depends(administrator),
+) -> list[dict]:
+    """List recent outgoing report email results for authorized operators."""
+    allowed_statuses = {"sent", "failed", "not_configured", "unavailable"}
+    if delivery_status and delivery_status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="Unknown email delivery status.")
+    where = "WHERE e.delivery_status=?" if delivery_status else ""
+    values = [delivery_status, limit] if delivery_status else [limit]
+    with connect() as db:
+        events = db.execute(f"""SELECT e.id,e.report_id AS reportId,e.event_type AS eventType,
+          e.recipient,e.subject,e.delivery_status AS deliveryStatus,e.delivery_detail AS detail,
+          e.transport,e.created_at AS createdAt,r.category,r.title,r.is_sensitive AS isSensitive
+          FROM email_events e JOIN reports r ON r.id=e.report_id {where}
+          ORDER BY e.id DESC LIMIT ?""", values).fetchall()
+        return [dict(row) for row in events]
 
 
 @app.get("/api/reports/{report_id}/photo")
@@ -1272,9 +1362,14 @@ def admin_update_report(report_id: str, body: ReportUpdate, user: sqlite3.Row = 
         new_status = row["status"]
     if notify:
         try:
-            result["emailStatus"] = deliver_report_email(report_id, "status_update", new_status)
+            email_status = deliver_report_email(report_id, "status_update", new_status)
         except Exception:
-            result["emailStatus"] = "failed"
+            email_status = "failed"
+        with connect() as db:
+            refreshed = db.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
+            if refreshed:
+                result = report_payload(db, refreshed, include_private=True, include_admin=True)
+        result["emailStatus"] = email_status
     return result
 
 
